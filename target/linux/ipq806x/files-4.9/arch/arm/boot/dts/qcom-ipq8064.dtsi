@@ -967,6 +967,9 @@
 
 			ranges;
 
+			resets = <&gcc USB30_0_MASTER_RESET>;
+			reset-names = "usb30_0_mstr_rst";
+
 			status = "disabled";
 
 			dwc3@11000000 {
@@ -977,6 +980,7 @@
 				phy-names = "usb2-phy", "usb3-phy";
 				dr_mode = "host";
 				snps,dis_u3_susphy_quirk;
+				usb3_dev_reset_quirk;
 			};
 		};
 
@@ -989,6 +993,9 @@
 
 			ranges;
 
+			resets = <&gcc USB30_1_MASTER_RESET>;
+			reset-names = "usb30_1_mstr_rst";
+
 			status = "disabled";
 
 			dwc3@10000000 {
@@ -999,6 +1006,7 @@
 				phy-names = "usb2-phy", "usb3-phy";
 				dr_mode = "host";
 				snps,dis_u3_susphy_quirk;
+				usb3_dev_reset_quirk;
 			};
 		};
 
@@ -1215,7 +1223,7 @@
 
 		gmac0: ethernet@37000000 {
 			device_type = "network";
-			compatible = "qcom,ipq806x-gmac";
+			compatible = "qcom,ipq806x-gmac", "snps,dwmac";
 			reg = <0x37000000 0x200000>;
 			interrupts = <GIC_SPI 220 IRQ_TYPE_LEVEL_HIGH>;
 			interrupt-names = "macirq";
@@ -1238,7 +1246,7 @@
 
 		gmac1: ethernet@37200000 {
 			device_type = "network";
-			compatible = "qcom,ipq806x-gmac";
+			compatible = "qcom,ipq806x-gmac", "snps,dwmac";
 			reg = <0x37200000 0x200000>;
 			interrupts = <GIC_SPI 223 IRQ_TYPE_LEVEL_HIGH>;
 			interrupt-names = "macirq";
@@ -1261,7 +1269,7 @@
 
 		gmac2: ethernet@37400000 {
 			device_type = "network";
-			compatible = "qcom,ipq806x-gmac";
+			compatible = "qcom,ipq806x-gmac", "snps,dwmac";
 			reg = <0x37400000 0x200000>;
 			interrupts = <GIC_SPI 226 IRQ_TYPE_LEVEL_HIGH>;
 			interrupt-names = "macirq";
@@ -1284,7 +1292,7 @@
 
 		gmac3: ethernet@37600000 {
 			device_type = "network";
-			compatible = "qcom,ipq806x-gmac";
+			compatible = "qcom,ipq806x-gmac", "snps,dwmac";
 			reg = <0x37600000 0x200000>;
 			interrupts = <GIC_SPI 229 IRQ_TYPE_LEVEL_HIGH>;
 			interrupt-names = "macirq";

@@ -3,6 +3,7 @@
  *
  * Copyright (C) 2009 Felix Fietkau <nbd@nbd.name>
  * Copyright (C) 2011-2012 Gabor Juhos <juhosg@openwrt.org>
+ * Copyright (c) 2017 The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -506,14 +507,6 @@ ar8327_hw_config_pdata(struct ar8xxx_priv *priv,
 	ar8xxx_write(priv, AR8327_REG_PAD0_MODE, t);
 
 	t = ar8327_get_pad_cfg(pdata->pad5_cfg);
-	if (chip_is_ar8337(priv)) {
-		/*
-		 * Workaround: RGMII RX delay setting needs to be
-		 * always specified for AR8337 to avoid port 5
-		 * RX hang on high traffic / flood conditions
-		 */
-		t |= AR8327_PAD_RGMII_RXCLK_DELAY_EN;
-	}
 	ar8xxx_write(priv, AR8327_REG_PAD5_MODE, t);
 	t = ar8327_get_pad_cfg(pdata->pad6_cfg);
 	ar8xxx_write(priv, AR8327_REG_PAD6_MODE, t);
@@ -667,7 +660,7 @@ ar8327_init_globals(struct ar8xxx_priv *priv)
 	    (AR8327_PORTS_ALL << AR8327_FWD_CTRL1_BC_FLOOD_S);
 	ar8xxx_write(priv, AR8327_REG_FWD_CTRL1, t);
 
-	/* enable jumbo frames */
+	/* setup MTU */
 	ar8xxx_rmw(priv, AR8327_REG_MAX_FRAME_SIZE,
 		   AR8327_MAX_FRAME_SIZE_MTU, 9018 + 8 + 2);
 
@@ -679,7 +672,20 @@ ar8327_init_globals(struct ar8xxx_priv *priv)
 	for (i = 0; i < AR8XXX_NUM_PHYS; i++)
 		data->eee[i] = false;
 
+	if (chip_is_ar8327(priv))
+		ar8xxx_write(priv, AR8327_REG_GLOBAL_FC_THRESH,
+				AR8327_GLOBAL_FC_THRESH_DFLT_VAL);
+
 	if (chip_is_ar8337(priv)) {
+
+		/*
+		 * Workaround: RGMII RX delay setting needs to be
+		 * always specified for AR8337 to avoid port 5
+		 * RX hang on high traffic / flood conditions
+		 */
+		ar8xxx_write(priv, AR8327_REG_PAD5_MODE,
+			AR8327_PAD_RGMII_RXCLK_DELAY_EN);
+
 		/* Update HOL registers with values suggested by QCA switch team */
 		for (i = 0; i < AR8327_NUM_PORTS; i++) {
 			if (i == AR8216_PORT_CPU || i == 5 || i == 6) {
@@ -916,10 +922,16 @@ ar8327_setup_port(struct ar8xxx_priv *priv, int port, u32 members)
 	u32 egress, ingress;
 	u32 pvid = priv->vlan_id[priv->pvid[port]];
 
+	egress = AR8327_PORT_VLAN1_OUT_MODE_UNMOD;
 	if (priv->vlan) {
-		egress = AR8327_PORT_VLAN1_OUT_MODE_UNMOD;
+		pvid = priv->vlan_id[priv->pvid[port]];
+		if (priv->vlan_tagged & (1 << port))
+			egress = AR8327_PORT_VLAN1_OUT_MODE_TAG;
+		else
+			egress = AR8327_PORT_VLAN1_OUT_MODE_UNTAG;
 		ingress = AR8216_IN_SECURE;
 	} else {
+		pvid = 0;
 		egress = AR8327_PORT_VLAN1_OUT_MODE_UNTOUCH;
 		ingress = AR8216_IN_PORT_ONLY;
 	}
@@ -937,6 +949,11 @@ ar8327_setup_port(struct ar8xxx_priv *priv, int port, u32 members)
 	t |= ingress << AR8327_PORT_LOOKUP_IN_MODE_S;
 	t |= AR8216_PORT_STATE_FORWARD << AR8327_PORT_LOOKUP_STATE_S;
 	ar8xxx_write(priv, AR8327_REG_PORT_LOOKUP(port), t);
+
+	t = ar8xxx_read(priv, AR8327_REG_ROUTE_EG_MODE);
+	t &= (~(0x3 << AR8327_ROUTE_EG_MODE_S(port)));
+	t |= egress << AR8327_ROUTE_EG_MODE_S(port);
+	ar8xxx_write(priv, AR8327_REG_ROUTE_EG_MODE, t);
 }
 
 static int
@@ -955,7 +972,7 @@ ar8327_sw_get_ports(struct switch_dev *dev, struct switch_val *val)
 
 		p = &val->value.ports[val->len++];
 		p->id = i;
-		if ((priv->vlan_tagged & (1 << i)) || (priv->pvid[i] != val->port_vlan))
+		if (priv->vlan_tagged & (1 << i))
 			p->flags = (1 << SWITCH_PORT_FLAG_TAGGED);
 		else
 			p->flags = 0;
@@ -968,19 +985,26 @@ ar8327_sw_set_ports(struct switch_dev *dev, struct switch_val *val)
 {
 	struct ar8xxx_priv *priv = swdev_to_ar8xxx(dev);
 	u8 *vt = &priv->vlan_table[val->port_vlan];
-	int i;
+	int i, j;
 
 	*vt = 0;
 	for (i = 0; i < val->len; i++) {
 		struct switch_port *p = &val->value.ports[i];
 
 		if (p->flags & (1 << SWITCH_PORT_FLAG_TAGGED)) {
-			if (val->port_vlan == priv->pvid[p->id]) {
-				priv->vlan_tagged |= (1 << p->id);
-			}
+			priv->vlan_tagged |= (1 << p->id);
 		} else {
 			priv->vlan_tagged &= ~(1 << p->id);
 			priv->pvid[p->id] = val->port_vlan;
+
+			/* make sure that untagged port does not
+			 * appear in other vlans
+			 */
+			for (j = 0; j < AR8X16_MAX_VLANS; j++) {
+				if (j == val->port_vlan)
+					continue;
+				priv->vlan_table[j] &= ~(1 << p->id);
+			}
 		}
 
 		*vt |= 1 << p->id;
@@ -1152,7 +1176,7 @@ ar8327_sw_hw_apply(struct switch_dev *dev)
 	if (ret)
 		return ret;
 
-	for (i=0; i < AR8XXX_NUM_PHYS; i++) {
+	for (i = 0; i < AR8XXX_NUM_PHYS; i++) {
 		if (data->eee[i])
 			ar8xxx_reg_clear(priv, AR8327_REG_EEE_CTRL,
 			       AR8327_EEE_CTRL_DISABLE_PHY(i));
@@ -1161,6 +1185,33 @@ ar8327_sw_hw_apply(struct switch_dev *dev)
 			       AR8327_EEE_CTRL_DISABLE_PHY(i));
 	}
 
+	return 0;
+}
+
+static int
+ar8327_sw_set_max_frame_size(struct switch_dev *dev,
+ 			const struct switch_attr *attr,
+ 			struct switch_val *val)
+{
+ 	struct ar8xxx_priv *priv = swdev_to_ar8xxx(dev);
+ 
+ 	ar8xxx_rmw(priv, AR8327_REG_MAX_FRAME_SIZE,
+ 			AR8327_MAX_FRAME_SIZE_MTU, val->value.i + 8 + 2);
+ 	return 0;
+}
+ 
+static int
+ar8327_sw_get_max_frame_size(struct switch_dev *dev,
+ 			const struct switch_attr *attr,
+ 			struct switch_val *val)
+{
+	u32 v;
+	struct ar8xxx_priv *priv = swdev_to_ar8xxx(dev);
+
+	v = ar8xxx_read(priv, AR8327_REG_MAX_FRAME_SIZE);
+	v &= AR8327_MAX_FRAME_SIZE_MTU;
+ 
+	val->value.i = v;
 	return 0;
 }
 
@@ -1277,6 +1328,14 @@ static const struct switch_attr ar8327_sw_attr_globals[] = {
 		.get = ar8xxx_sw_get_vlan,
 		.max = 1
 	},
+ 	{
+ 		.type = SWITCH_TYPE_INT,
+ 		.name = "max_frame_size",
+ 		.description = "Max frame size can be rx and tx by mac",
+ 		.set = ar8327_sw_set_max_frame_size,
+ 		.get = ar8327_sw_get_max_frame_size,
+ 		.max = 9018
+ 	},
 	{
 		.type = SWITCH_TYPE_NOVAL,
 		.name = "reset_mibs",
